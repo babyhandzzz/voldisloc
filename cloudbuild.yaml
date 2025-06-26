@@ -1,0 +1,18 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/voldisloc:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/voldisloc:$COMMIT_SHA']
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      [
+        'run', 'deploy', 'voldisloc',
+        '--image', 'gcr.io/$PROJECT_ID/voldisloc:$COMMIT_SHA',
+        '--region', 'northamerica-northeast2',
+        '--platform', 'managed',
+        '--allow-unauthenticated',
+        '--service-account', 'cloud-run-deployer@voldilsloc.iam.gserviceaccount.com'
+      ]
+images:
+  - 'gcr.io/$PROJECT_ID/voldisloc:$COMMIT_SHA'
