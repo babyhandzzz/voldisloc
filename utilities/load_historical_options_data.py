@@ -3,6 +3,18 @@ import requests
 from google.cloud import bigquery
 import time
 import pandas as pd
+import yaml
+
+# Load config
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+
+project_id = config["project_id"]
+symbol = config["symbol"]
+table_id = config["table_id"]
+date_start = config["date_start"]
+today = pd.Timestamp.today().strftime("%Y-%m-%d")
+date_range = pd.date_range(start=date_start, end=today).strftime("%Y-%m-%d").tolist()
 
 def create_options_table_if_not_exists(table_id, project_id):
     client = bigquery.Client(project=project_id)
@@ -29,7 +41,8 @@ def create_options_table_if_not_exists(table_id, project_id):
         bigquery.SchemaField('gamma', 'FLOAT'),
         bigquery.SchemaField('theta', 'FLOAT'),
         bigquery.SchemaField('vega', 'FLOAT'),
-        bigquery.SchemaField('rho', 'FLOAT')
+        bigquery.SchemaField('rho', 'FLOAT'),
+        bigquery.SchemaField('collected_date', 'DATE')
     ]
     table = bigquery.Table(table_ref, schema=schema)
     table.time_partitioning = bigquery.TimePartitioning(
@@ -66,7 +79,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             data = response.json()
             if 'data' in data and data['data']:
                 for row in data['data']:
-                    # Convert types according to schema
+                    # Add 'collected_date' to each row
                     all_rows.append({
                         'contractID': row.get('contractID'),
                         'symbol': row.get('symbol', symbol),
@@ -87,7 +100,8 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
                         'gamma': float(row.get('gamma')) if row.get('gamma') is not None else None,
                         'theta': float(row.get('theta')) if row.get('theta') is not None else None,
                         'vega': float(row.get('vega')) if row.get('vega') is not None else None,
-                        'rho': float(row.get('rho')) if row.get('rho') is not None else None
+                        'rho': float(row.get('rho')) if row.get('rho') is not None else None,
+                        'collected_date': date
                     })
             else:
                 print(f"No data for {symbol} on {date}")
@@ -98,8 +112,32 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             time.sleep(sleep_seconds)
     if all_rows:
         client = bigquery.Client(project=project_id)
+        # Update schema to include collected_date
+        schema = [
+            bigquery.SchemaField('contractID', 'STRING'),
+            bigquery.SchemaField('symbol', 'STRING'),
+            bigquery.SchemaField('expiration', 'DATE'),
+            bigquery.SchemaField('strike', 'FLOAT'),
+            bigquery.SchemaField('type', 'STRING'),
+            bigquery.SchemaField('last', 'FLOAT'),
+            bigquery.SchemaField('mark', 'FLOAT'),
+            bigquery.SchemaField('bid', 'FLOAT'),
+            bigquery.SchemaField('bid_size', 'INTEGER'),
+            bigquery.SchemaField('ask', 'FLOAT'),
+            bigquery.SchemaField('ask_size', 'INTEGER'),
+            bigquery.SchemaField('volume', 'INTEGER'),
+            bigquery.SchemaField('open_interest', 'INTEGER'),
+            bigquery.SchemaField('date', 'DATE'),
+            bigquery.SchemaField('implied_volatility', 'FLOAT'),
+            bigquery.SchemaField('delta', 'FLOAT'),
+            bigquery.SchemaField('gamma', 'FLOAT'),
+            bigquery.SchemaField('theta', 'FLOAT'),
+            bigquery.SchemaField('vega', 'FLOAT'),
+            bigquery.SchemaField('rho', 'FLOAT'),
+            bigquery.SchemaField('collected_date', 'DATE')
+        ]
         table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
-        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
+        job_config = bigquery.LoadJobConfig(schema=schema, write_disposition="WRITE_APPEND")
         job = client.load_table_from_json(all_rows, table_ref, job_config=job_config)
         job.result()  # Wait for the job to complete
         print(f"Inserted {len(all_rows)} rows into {table_id}.")
@@ -110,11 +148,6 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
 
 # Example usage:
 if __name__ == "__main__":
-    symbol = "AAPL"
-    today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    date_range = pd.date_range(start="2025-01-01", end=today).strftime("%Y-%m-%d").tolist()
-    table_id = "historical_data.appl"  # Replace with your dataset.table
-    project_id = "voldilsloc"        # Replace with your GCP project ID
     fetch_historical_options(symbol, date_range, table_id, project_id)
 
 
