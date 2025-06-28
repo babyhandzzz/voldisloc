@@ -146,9 +146,12 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
         print("No data returned.")
         return 0
 
-# Example usage:
-if __name__ == "__main__":
+def main():
     fetch_historical_options(symbol, date_range, table_id, project_id)
+
+# Only run main if executed as a script, not on import
+if __name__ == "__main__":
+    main()
 
 
 
