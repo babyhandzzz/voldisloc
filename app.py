@@ -1,17 +1,20 @@
 from flask import Flask, jsonify
 import os
+import threading
 import utilities.load_historical_options_data as loader
 
 app = Flask(__name__)
 
 @app.route("/run", methods=["POST", "GET"])
 def run_loader():
-    try:
-        # Call your main function or logic here
-        loader.main()  # You may need to adjust this if the entry point is different
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    def run_in_background():
+        try:
+            loader.main()
+        except Exception as e:
+            print(f"Background error: {e}")
+    thread = threading.Thread(target=run_in_background)
+    thread.start()
+    return jsonify({"status": "started"}), 202
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))

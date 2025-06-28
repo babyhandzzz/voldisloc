@@ -14,5 +14,8 @@ COPY . .
 # Set environment variables (optional)
 # ENV PYTHONUNBUFFERED=1
 
+# Expose the port the app runs on
+EXPOSE 8080
+
 # Default command (can be changed as needed)
 CMD ["python3", "app.py"]
