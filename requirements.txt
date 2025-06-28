@@ -38,7 +38,6 @@ pandas-gbq==0.29.1
 parso==0.8.4
 pexpect==4.9.0
 platformdirs==4.3.8
-polygon-api-client==1.14.6
 prompt_toolkit==3.0.51
 proto-plus==1.26.1
 protobuf==6.31.1

@@ -5,16 +5,11 @@ import time
 import pandas as pd
 import yaml
 
-# Load config
-with open("config.yaml", "r") as f:
-    config = yaml.safe_load(f)
-
-project_id = config["project_id"]
-symbol = config["symbol"]
-table_id = config["table_id"]
-date_start = config["date_start"]
-today = pd.Timestamp.today().strftime("%Y-%m-%d")
-date_range = pd.date_range(start=date_start, end=today).strftime("%Y-%m-%d").tolist()
+def get_config():
+    print("Loading config.yaml...")
+    with open("config.yaml", "r") as f:
+        config = yaml.safe_load(f)
+    return config
 
 def create_options_table_if_not_exists(table_id, project_id):
     client = bigquery.Client(project=project_id)
@@ -58,17 +53,7 @@ def create_options_table_if_not_exists(table_id, project_id):
         print(f"Created table {table_id} with partitioning and clustering.")
 
 def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=15):
-    """
-    Fetch historical options data for a given symbol and date range from Alpha Vantage and push to BigQuery using the BigQuery client directly.
-    Args:
-        symbol (str): Stock ticker symbol.
-        date_range (iterable): Iterable of date strings (YYYY-MM-DD).
-        table_id (str): BigQuery table in the format 'dataset.table'.
-        project_id (str): Google Cloud project ID.
-        sleep_seconds (int): Seconds to sleep between API calls. Default is 15.
-    Returns:
-        int: Number of rows inserted.
-    """
+    print("Fetching historical options...")
     create_options_table_if_not_exists(table_id, project_id)
     alpha_vantage_key = get_secret("alpha_vantage_api_key")
     all_rows = []
@@ -79,7 +64,6 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             data = response.json()
             if 'data' in data and data['data']:
                 for row in data['data']:
-                    # Add 'collected_date' to each row
                     all_rows.append({
                         'contractID': row.get('contractID'),
                         'symbol': row.get('symbol', symbol),
@@ -112,7 +96,6 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             time.sleep(sleep_seconds)
     if all_rows:
         client = bigquery.Client(project=project_id)
-        # Update schema to include collected_date
         schema = [
             bigquery.SchemaField('contractID', 'STRING'),
             bigquery.SchemaField('symbol', 'STRING'),
@@ -139,7 +122,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
         table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
         job_config = bigquery.LoadJobConfig(schema=schema, write_disposition="WRITE_APPEND")
         job = client.load_table_from_json(all_rows, table_ref, job_config=job_config)
-        job.result()  # Wait for the job to complete
+        job.result()
         print(f"Inserted {len(all_rows)} rows into {table_id}.")
         return len(all_rows)
     else:
@@ -147,6 +130,13 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
         return 0
 
 def main():
+    config = get_config()
+    project_id = config["project_id"]
+    symbol = config["symbol"]
+    table_id = config["table_id"]
+    date_start = config["date_start"]
+    today = pd.Timestamp.today().strftime("%Y-%m-%d")
+    date_range = pd.date_range(start=date_start, end=today).strftime("%Y-%m-%d").tolist()
     fetch_historical_options(symbol, date_range, table_id, project_id)
 
 # Only run main if executed as a script, not on import

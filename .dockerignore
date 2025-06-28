@@ -58,8 +58,6 @@ coverage.xml
 Dockerfile
 .dockerignore
 
-# Credentials and config (customize as needed)
-# config.yaml  # <-- Do not ignore if needed for app
 
 # Other
 *.log
