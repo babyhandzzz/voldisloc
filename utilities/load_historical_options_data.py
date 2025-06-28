@@ -1,4 +1,4 @@
-from cred_retrieval import get_secret
+from utilities.cred_retrieval import get_secret
 import requests
 from google.cloud import bigquery
 import time
