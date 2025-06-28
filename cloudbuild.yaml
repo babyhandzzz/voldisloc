@@ -9,7 +9,7 @@ steps:
       [
         'run', 'deploy', 'voldisloc',
         '--image', 'gcr.io/$PROJECT_ID/voldisloc:$COMMIT_SHA',
-        '--region', 'northamerica-northeast2',
+        '--region', 'us-central1',
         '--platform', 'managed',
         '--allow-unauthenticated',
         '--service-account', 'cloud-run-deployer@voldilsloc.iam.gserviceaccount.com'
