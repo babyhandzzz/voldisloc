@@ -15,4 +15,4 @@ COPY . .
 # ENV PYTHONUNBUFFERED=1
 
 # Default command (can be changed as needed)
-CMD ["python3", "utilities/load_historical_options_data.py"]
+CMD ["python3", "app.py"]
