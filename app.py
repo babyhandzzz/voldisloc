@@ -5,6 +5,10 @@ import utilities.load_historical_options_data as loader
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({"status": "ok", "message": "Voldisloc service is running. Use /run to start data loading."})
+
 @app.route("/run", methods=["POST", "GET"])
 def run_loader():
     def run_in_background():
