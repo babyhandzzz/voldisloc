@@ -4,6 +4,7 @@ from google.cloud import bigquery
 import time
 import pandas as pd
 import yaml
+import random  # Added for jitter
 
 def get_config():
     print("Loading config.yaml...")
@@ -52,7 +53,7 @@ def create_options_table_if_not_exists(table_id, project_id):
         client.create_table(table)
         print(f"Created table {table_id} with partitioning and clustering.")
 
-def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=15):
+def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=17):
     print("Fetching historical options...")
     create_options_table_if_not_exists(table_id, project_id)
     alpha_vantage_key = get_secret("alpha_vantage_api_key")
@@ -92,8 +93,10 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
         else:
             print(f"Error: Unable to fetch data for {symbol} on {date}. Status code: {response.status_code}")
         if idx < len(date_range) - 1:
-            print(f"Sleeping {sleep_seconds} seconds to avoid API rate limits...")
-            time.sleep(sleep_seconds)
+            jitter = random.uniform(-2, 2)
+            sleep_time = sleep_seconds + jitter
+            print(f"Sleeping {sleep_time:.2f} seconds to avoid API rate limits (base {sleep_seconds}s + jitter {jitter:.2f}s)...")
+            time.sleep(sleep_time)
     if all_rows:
         client = bigquery.Client(project=project_id)
         schema = [

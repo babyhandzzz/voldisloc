@@ -1,5 +1,5 @@
 project_id: voldilsloc
 symbol: ABNB
 table_id: historical_data.abnb
-date_start: 2025-06-20
+date_start: 2025-01-01
 # date_end will be set to today dynamically in the script
