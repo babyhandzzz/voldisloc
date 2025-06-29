@@ -60,10 +60,14 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
     all_rows = []
     for idx, date in enumerate(date_range):
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
+        print(f"Fetching data for {symbol} on {date}...")
         response = requests.get(url)
+        print(f"Response status code: {response.status_code}")
         if response.status_code == 200:
             data = response.json()
+            print(f"API Response for {symbol} on {date}: {data}")
             if 'data' in data and data['data']:
+                print(f"Found {len(data['data'])} records for {symbol} on {date}")
                 for row in data['data']:
                     all_rows.append({
                         'contractID': row.get('contractID'),
@@ -92,6 +96,12 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
                 print(f"No data for {symbol} on {date}")
         else:
             print(f"Error: Unable to fetch data for {symbol} on {date}. Status code: {response.status_code}")
+            if response.status_code == 429:
+                print("API rate limit hit. Response:", response.text)
+                # Add additional sleep time if we hit rate limits
+                time.sleep(60)  # Wait a full minute before continuing
+            else:
+                print("API Response:", response.text)
         if idx < len(date_range) - 1:
             jitter = random.uniform(-2, 2)
             sleep_time = sleep_seconds + jitter
