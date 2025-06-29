@@ -8,10 +8,12 @@ app = Flask(__name__)
 @app.route("/run", methods=["POST", "GET"])
 def run_loader():
     def run_in_background():
+        print("Starting loader.main()")
         try:
             loader.main()
         except Exception as e:
             print(f"Background error: {e}")
+        print("Finished loader.main()")
     thread = threading.Thread(target=run_in_background)
     thread.start()
     return jsonify({"status": "started"}), 202
