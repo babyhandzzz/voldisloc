@@ -18,4 +18,4 @@ COPY . .
 EXPOSE 8080
 
 # Default command (can be changed as needed)
-CMD ["python", "app.py"]
+CMD ["python", "-m", "utilities.load_historical_options_data"]
