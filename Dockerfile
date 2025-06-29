@@ -18,4 +18,7 @@ COPY . .
 EXPOSE 8080
 
 # Default command (can be changed as needed)
+# For Cloud Run Job (batch):
 CMD ["python", "-m", "utilities.load_historical_options_data"]
+# For Cloud Run Service (HTTP):
+# CMD ["python", "app.py"]
