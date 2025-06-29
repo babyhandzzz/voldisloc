@@ -98,36 +98,41 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             print(f"Sleeping {sleep_time:.2f} seconds to avoid API rate limits (base {sleep_seconds}s + jitter {jitter:.2f}s)...")
             time.sleep(sleep_time)
     if all_rows:
-        client = bigquery.Client(project=project_id)
-        schema = [
-            bigquery.SchemaField('contractID', 'STRING'),
-            bigquery.SchemaField('symbol', 'STRING'),
-            bigquery.SchemaField('expiration', 'DATE'),
-            bigquery.SchemaField('strike', 'FLOAT'),
-            bigquery.SchemaField('type', 'STRING'),
-            bigquery.SchemaField('last', 'FLOAT'),
-            bigquery.SchemaField('mark', 'FLOAT'),
-            bigquery.SchemaField('bid', 'FLOAT'),
-            bigquery.SchemaField('bid_size', 'INTEGER'),
-            bigquery.SchemaField('ask', 'FLOAT'),
-            bigquery.SchemaField('ask_size', 'INTEGER'),
-            bigquery.SchemaField('volume', 'INTEGER'),
-            bigquery.SchemaField('open_interest', 'INTEGER'),
-            bigquery.SchemaField('date', 'DATE'),
-            bigquery.SchemaField('implied_volatility', 'FLOAT'),
-            bigquery.SchemaField('delta', 'FLOAT'),
-            bigquery.SchemaField('gamma', 'FLOAT'),
-            bigquery.SchemaField('theta', 'FLOAT'),
-            bigquery.SchemaField('vega', 'FLOAT'),
-            bigquery.SchemaField('rho', 'FLOAT'),
-            bigquery.SchemaField('collected_date', 'DATE')
-        ]
-        table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
-        job_config = bigquery.LoadJobConfig(schema=schema, write_disposition="WRITE_APPEND")
-        job = client.load_table_from_json(all_rows, table_ref, job_config=job_config)
-        job.result()
-        print(f"Inserted {len(all_rows)} rows into {table_id}.")
-        return len(all_rows)
+        print(f"Preparing to insert {len(all_rows)} rows into {table_id}...")
+        try:
+            client = bigquery.Client(project=project_id)
+            schema = [
+                bigquery.SchemaField('contractID', 'STRING'),
+                bigquery.SchemaField('symbol', 'STRING'),
+                bigquery.SchemaField('expiration', 'DATE'),
+                bigquery.SchemaField('strike', 'FLOAT'),
+                bigquery.SchemaField('type', 'STRING'),
+                bigquery.SchemaField('last', 'FLOAT'),
+                bigquery.SchemaField('mark', 'FLOAT'),
+                bigquery.SchemaField('bid', 'FLOAT'),
+                bigquery.SchemaField('bid_size', 'INTEGER'),
+                bigquery.SchemaField('ask', 'FLOAT'),
+                bigquery.SchemaField('ask_size', 'INTEGER'),
+                bigquery.SchemaField('volume', 'INTEGER'),
+                bigquery.SchemaField('open_interest', 'INTEGER'),
+                bigquery.SchemaField('date', 'DATE'),
+                bigquery.SchemaField('implied_volatility', 'FLOAT'),
+                bigquery.SchemaField('delta', 'FLOAT'),
+                bigquery.SchemaField('gamma', 'FLOAT'),
+                bigquery.SchemaField('theta', 'FLOAT'),
+                bigquery.SchemaField('vega', 'FLOAT'),
+                bigquery.SchemaField('rho', 'FLOAT'),
+                bigquery.SchemaField('collected_date', 'DATE')
+            ]
+            table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
+            job_config = bigquery.LoadJobConfig(schema=schema, write_disposition="WRITE_APPEND")
+            job = client.load_table_from_json(all_rows, table_ref, job_config=job_config)
+            job.result()
+            print(f"Successfully inserted {len(all_rows)} rows into {table_id}.")
+            return len(all_rows)
+        except Exception as e:
+            print(f"Failed to insert data into {table_id}: {e}")
+            return 0
     else:
         print("No data returned.")
         return 0
