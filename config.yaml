@@ -1,5 +1,5 @@
 project_id: voldilsloc
-symbol: MSFT
-table_id: historical_data.msft
+symbol: BSX
+table_id: historical_data.bsx
 date_start: 2025-06-25
 # date_end will be set to today dynamically in the script
