@@ -53,10 +53,12 @@ def create_options_table_if_not_exists(table_id, project_id):
         client.create_table(table)
         print(f"Created table {table_id} with partitioning and clustering.")
 
-def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=17):
-    print("Fetching historical options...")
+def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=0.86):  # 0.86s = ~70 calls per minute
+    print("Fetching historical options with Pro API rate limit (70 calls/minute)...")
     create_options_table_if_not_exists(table_id, project_id)
     alpha_vantage_key = get_secret("alpha_vantage_api_key")
+    calls_in_last_minute = 0
+    last_call_time = time.time()
     all_rows = []
     for idx, date in enumerate(date_range):
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
@@ -102,11 +104,25 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
                 time.sleep(60)  # Wait a full minute before continuing
             else:
                 print("API Response:", response.text)
-        if idx < len(date_range) - 1:
-            jitter = random.uniform(-2, 2)
-            sleep_time = sleep_seconds + jitter
-            print(f"Sleeping {sleep_time:.2f} seconds to avoid API rate limits (base {sleep_seconds}s + jitter {jitter:.2f}s)...")
-            time.sleep(sleep_time)
+        calls_in_last_minute += 1
+        
+        # Reset counter if a minute has passed
+        current_time = time.time()
+        if current_time - last_call_time >= 60:
+            calls_in_last_minute = 0
+            last_call_time = current_time
+        
+        # If we're approaching the rate limit, wait until the minute is up
+        if calls_in_last_minute >= 70:
+            wait_time = 60 - (current_time - last_call_time)
+            if wait_time > 0:
+                print(f"Reached rate limit (70 calls/minute). Waiting {wait_time:.2f} seconds...")
+                time.sleep(wait_time)
+                calls_in_last_minute = 0
+                last_call_time = time.time()
+        # Small delay between calls to prevent overwhelming the API
+        elif idx < len(date_range) - 1:
+            time.sleep(sleep_seconds)
     if all_rows:
         print(f"Preparing to insert {len(all_rows)} rows into {table_id}...")
         try:
