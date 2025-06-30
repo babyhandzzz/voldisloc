@@ -11,8 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code
 COPY . .
 
-# Set environment variables (optional)
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
 # Expose the port the app runs on
 EXPOSE 8080
