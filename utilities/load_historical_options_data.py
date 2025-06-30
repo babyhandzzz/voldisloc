@@ -4,7 +4,9 @@ from google.cloud import bigquery
 import time
 import pandas as pd
 import yaml
-import random  # Added for jitter
+import random
+from urllib3.util import Retry
+from requests.adapters import HTTPAdapter
 
 def get_config():
     print("Loading config.yaml...")
@@ -53,6 +55,18 @@ def create_options_table_if_not_exists(table_id, project_id):
         client.create_table(table)
         print(f"Created table {table_id} with partitioning and clustering.")
 
+def create_session_with_retries():
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=5,  # maximum number of retries
+        backoff_factor=1,  # wait 1, 2, 4, 8, 16 seconds between retries
+        status_forcelist=[429, 500, 502, 503, 504],  # status codes to retry on
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
 def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=0.86):  # 0.86s = ~70 calls per minute
     print("Fetching historical options with Pro API rate limit (70 calls/minute)...")
     create_options_table_if_not_exists(table_id, project_id)
@@ -60,55 +74,64 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
     calls_in_last_minute = 0
     last_call_time = time.time()
     all_rows = []
+    session = create_session_with_retries()
+
     for idx, date in enumerate(date_range):
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
         print(f"Fetching data for {symbol} on {date}...")
-        response = requests.get(url)
-        print(f"Response status code: {response.status_code}")
-        if response.status_code == 200:
-            data = response.json()
-            print(f"API Response for {symbol} on {date}: {data}")
-            if 'data' in data and data['data']:
-                print(f"Found {len(data['data'])} records for {symbol} on {date}")
-                for row in data['data']:
-                    all_rows.append({
-                        'contractID': row.get('contractID'),
-                        'symbol': row.get('symbol', symbol),
-                        'expiration': row.get('expiration'),
-                        'strike': float(row.get('strike')) if row.get('strike') is not None else None,
-                        'type': row.get('type'),
-                        'last': float(row.get('last')) if row.get('last') is not None else None,
-                        'mark': float(row.get('mark')) if row.get('mark') is not None else None,
-                        'bid': float(row.get('bid')) if row.get('bid') is not None else None,
-                        'bid_size': int(row.get('bid_size')) if row.get('bid_size') is not None else None,
-                        'ask': float(row.get('ask')) if row.get('ask') is not None else None,
-                        'ask_size': int(row.get('ask_size')) if row.get('ask_size') is not None else None,
-                        'volume': int(row.get('volume')) if row.get('volume') is not None else None,
-                        'open_interest': int(row.get('open_interest')) if row.get('open_interest') is not None else None,
-                        'date': row.get('date', date),
-                        'implied_volatility': float(row.get('implied_volatility')) if row.get('implied_volatility') is not None else None,
-                        'delta': float(row.get('delta')) if row.get('delta') is not None else None,
-                        'gamma': float(row.get('gamma')) if row.get('gamma') is not None else None,
-                        'theta': float(row.get('theta')) if row.get('theta') is not None else None,
-                        'vega': float(row.get('vega')) if row.get('vega') is not None else None,
-                        'rho': float(row.get('rho')) if row.get('rho') is not None else None,
-                        'collected_date': date
-                    })
+        
+        try:
+            response = session.get(url)
+            print(f"Response status code: {response.status_code}")
+            
+            if response.status_code == 503:
+                print(f"Service unavailable for {symbol} on {date}. Will retry automatically...")
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"API Response for {symbol} on {date}: {data}")
+                if 'data' in data and data['data']:
+                    print(f"Found {len(data['data'])} records for {symbol} on {date}")
+                    for row in data['data']:
+                        all_rows.append({
+                            'contractID': row.get('contractID'),
+                            'symbol': row.get('symbol', symbol),
+                            'expiration': row.get('expiration'),
+                            'strike': float(row.get('strike')) if row.get('strike') is not None else None,
+                            'type': row.get('type'),
+                            'last': float(row.get('last')) if row.get('last') is not None else None,
+                            'mark': float(row.get('mark')) if row.get('mark') is not None else None,
+                            'bid': float(row.get('bid')) if row.get('bid') is not None else None,
+                            'bid_size': int(row.get('bid_size')) if row.get('bid_size') is not None else None,
+                            'ask': float(row.get('ask')) if row.get('ask') is not None else None,
+                            'ask_size': int(row.get('ask_size')) if row.get('ask_size') is not None else None,
+                            'volume': int(row.get('volume')) if row.get('volume') is not None else None,
+                            'open_interest': int(row.get('open_interest')) if row.get('open_interest') is not None else None,
+                            'date': row.get('date', date),
+                            'implied_volatility': float(row.get('implied_volatility')) if row.get('implied_volatility') is not None else None,
+                            'delta': float(row.get('delta')) if row.get('delta') is not None else None,
+                            'gamma': float(row.get('gamma')) if row.get('gamma') is not None else None,
+                            'theta': float(row.get('theta')) if row.get('theta') is not None else None,
+                            'vega': float(row.get('vega')) if row.get('vega') is not None else None,
+                            'rho': float(row.get('rho')) if row.get('rho') is not None else None,
+                            'collected_date': date
+                        })
+                else:
+                    print(f"No data for {symbol} on {date}")
             else:
-                print(f"No data for {symbol} on {date}")
-        else:
-            print(f"Error: Unable to fetch data for {symbol} on {date}. Status code: {response.status_code}")
-            if response.status_code == 429:
-                print("API rate limit hit. Response:", response.text)
-                # Add additional sleep time if we hit rate limits
-                time.sleep(60)  # Wait a full minute before continuing
-            else:
+                print(f"Error: Unable to fetch data for {symbol} on {date}. Status code: {response.status_code}")
                 print("API Response:", response.text)
+                
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed after all retries for {symbol} on {date}: {e}")
+            continue
+
         calls_in_last_minute += 1
         
         # Reset counter if a minute has passed
         current_time = time.time()
         if current_time - last_call_time >= 60:
+            print(f"Resetting rate limit counter. Made {calls_in_last_minute} calls in the last minute.")
             calls_in_last_minute = 0
             last_call_time = current_time
         
