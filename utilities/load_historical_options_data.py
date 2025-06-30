@@ -156,10 +156,10 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             print("\nData types before conversion:")
             print(df.dtypes)
             
-            # Convert date columns
+            # Convert date columns to YYYY-MM-DD format
             date_columns = ['expiration', 'date', 'collected_date']
             for col in date_columns:
-                df[col] = pd.to_datetime(df[col]).dt.date
+                df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
             
             print("\nSample of data to be inserted:")
             print(df.head(1).to_string())
@@ -202,14 +202,14 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             print("\nBigQuery job started. Waiting for completion...")
             
             # Wait for the job to complete and get the result
-            result = job.result()
+            result = job.result()  # This will raise an exception if the job fails
             
-            # Get detailed job information
-            job = client.get_job(job.job_id)
+            # Get the destination table
+            destination_table = client.get_table(table_ref)
             
-            print(f"\nJob status: {job.state}")
-            print(f"Bytes processed: {job.statistics.load_statistics.input_bytes}")
-            print(f"Rows inserted: {job.statistics.load_statistics.output_rows}")
+            print(f"\nJob status: COMPLETED")
+            print(f"Table size: {destination_table.num_rows} rows")
+            print(f"Data uploaded successfully to {table_id}")
             
             if job.errors:
                 print("\nErrors encountered:")
