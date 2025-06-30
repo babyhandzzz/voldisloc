@@ -89,9 +89,11 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             
             if response.status_code == 200:
                 data = response.json()
-                print(f"API Response for {symbol} on {date}: {data}")
                 if 'data' in data and data['data']:
-                    print(f"Found {len(data['data'])} records for {symbol} on {date}")
+                    record_count = len(data['data'])
+                    print(f"Found {record_count} records for {symbol} on {date}")
+                    if record_count == 0:
+                        print("Warning: Empty data array returned from API")
                     for row in data['data']:
                         all_rows.append({
                             'contractID': row.get('contractID'),
@@ -149,38 +151,82 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
     if all_rows:
         print(f"Preparing to insert {len(all_rows)} rows into {table_id}...")
         try:
+            # Convert to pandas DataFrame for easier data validation
+            df = pd.DataFrame(all_rows)
+            print("\nData types before conversion:")
+            print(df.dtypes)
+            
+            # Convert date columns
+            date_columns = ['expiration', 'date', 'collected_date']
+            for col in date_columns:
+                df[col] = pd.to_datetime(df[col]).dt.date
+            
+            print("\nSample of data to be inserted:")
+            print(df.head(1).to_string())
+            
             client = bigquery.Client(project=project_id)
-            schema = [
-                bigquery.SchemaField('contractID', 'STRING'),
-                bigquery.SchemaField('symbol', 'STRING'),
-                bigquery.SchemaField('expiration', 'DATE'),
-                bigquery.SchemaField('strike', 'FLOAT'),
-                bigquery.SchemaField('type', 'STRING'),
-                bigquery.SchemaField('last', 'FLOAT'),
-                bigquery.SchemaField('mark', 'FLOAT'),
-                bigquery.SchemaField('bid', 'FLOAT'),
-                bigquery.SchemaField('bid_size', 'INTEGER'),
-                bigquery.SchemaField('ask', 'FLOAT'),
-                bigquery.SchemaField('ask_size', 'INTEGER'),
-                bigquery.SchemaField('volume', 'INTEGER'),
-                bigquery.SchemaField('open_interest', 'INTEGER'),
-                bigquery.SchemaField('date', 'DATE'),
-                bigquery.SchemaField('implied_volatility', 'FLOAT'),
-                bigquery.SchemaField('delta', 'FLOAT'),
-                bigquery.SchemaField('gamma', 'FLOAT'),
-                bigquery.SchemaField('theta', 'FLOAT'),
-                bigquery.SchemaField('vega', 'FLOAT'),
-                bigquery.SchemaField('rho', 'FLOAT'),
-                bigquery.SchemaField('collected_date', 'DATE')
-            ]
             table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
-            job_config = bigquery.LoadJobConfig(schema=schema, write_disposition="WRITE_APPEND")
-            job = client.load_table_from_json(all_rows, table_ref, job_config=job_config)
-            job.result()
-            print(f"Successfully inserted {len(all_rows)} rows into {table_id}.")
-            return len(all_rows)
+            
+            # Convert back to records
+            records = df.to_dict('records')
+            
+            job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField('contractID', 'STRING'),
+                    bigquery.SchemaField('symbol', 'STRING'),
+                    bigquery.SchemaField('expiration', 'DATE'),
+                    bigquery.SchemaField('strike', 'FLOAT'),
+                    bigquery.SchemaField('type', 'STRING'),
+                    bigquery.SchemaField('last', 'FLOAT'),
+                    bigquery.SchemaField('mark', 'FLOAT'),
+                    bigquery.SchemaField('bid', 'FLOAT'),
+                    bigquery.SchemaField('bid_size', 'INTEGER'),
+                    bigquery.SchemaField('ask', 'FLOAT'),
+                    bigquery.SchemaField('ask_size', 'INTEGER'),
+                    bigquery.SchemaField('volume', 'INTEGER'),
+                    bigquery.SchemaField('open_interest', 'INTEGER'),
+                    bigquery.SchemaField('date', 'DATE'),
+                    bigquery.SchemaField('implied_volatility', 'FLOAT'),
+                    bigquery.SchemaField('delta', 'FLOAT'),
+                    bigquery.SchemaField('gamma', 'FLOAT'),
+                    bigquery.SchemaField('theta', 'FLOAT'),
+                    bigquery.SchemaField('vega', 'FLOAT'),
+                    bigquery.SchemaField('rho', 'FLOAT'),
+                    bigquery.SchemaField('collected_date', 'DATE')
+                ],
+                write_disposition="WRITE_APPEND"
+            )
+            
+            # Start the load job
+            job = client.load_table_from_json(records, table_ref, job_config=job_config)
+            print("\nBigQuery job started. Waiting for completion...")
+            
+            # Wait for the job to complete and get the result
+            result = job.result()
+            
+            # Get detailed job information
+            job = client.get_job(job.job_id)
+            
+            print(f"\nJob status: {job.state}")
+            print(f"Bytes processed: {job.statistics.load_statistics.input_bytes}")
+            print(f"Rows inserted: {job.statistics.load_statistics.output_rows}")
+            
+            if job.errors:
+                print("\nErrors encountered:")
+                for error in job.errors:
+                    print(f"Error: {error['message']}")
+                return 0
+            
+            print(f"\nSuccessfully inserted {len(records)} rows into {table_id}.")
+            return len(records)
+            
         except Exception as e:
-            print(f"Failed to insert data into {table_id}: {e}")
+            print(f"\nFailed to insert data into {table_id}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            import traceback
+            print("\nFull error traceback:")
+            traceback.print_exc()
             return 0
     else:
         print("No data returned.")
