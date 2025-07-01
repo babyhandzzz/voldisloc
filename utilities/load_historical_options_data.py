@@ -201,6 +201,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
         date_month = current_date.strftime('%Y-%m')
         if current_month is None:
             current_month = date_month
+            print(f"\nStarting month {current_month}")
         elif date_month != current_month:
             # Push the current month's batch before starting a new month
             if current_batch:
@@ -210,6 +211,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
                 print(f"Inserted {rows_inserted} rows for {current_month}. Total rows so far: {total_rows_inserted}")
                 current_batch = []  # Reset batch for new month
             current_month = date_month
+            print(f"\nStarting month {current_month}")
         
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
         print(f"Fetching data for {symbol} on {date}...")
