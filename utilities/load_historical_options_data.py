@@ -74,18 +74,45 @@ def push_batch_to_bq(rows, table_id, project_id):
     
     try:
         print(f"\nPreparing to insert {len(rows)} rows into {table_id}...")
+        
+        # Convert to DataFrame and handle data types
         df = pd.DataFrame(rows)
+        
+        # Convert numeric columns to appropriate types
+        float_cols = ['strike', 'last', 'mark', 'bid', 'ask', 'implied_volatility', 'delta', 'gamma', 'theta', 'vega', 'rho']
+        int_cols = ['bid_size', 'ask_size', 'volume', 'open_interest']
+        
+        for col in float_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        for col in int_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
         
         # Convert date columns to YYYY-MM-DD format
         date_columns = ['expiration', 'date', 'collected_date']
         for col in date_columns:
-            df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
         
         print("\nSample of data to be inserted:")
         print(df.head(1).to_string())
+        print(f"\nData types after conversion:")
+        print(df.dtypes)
         
         client = bigquery.Client(project=project_id)
-        table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
+        dataset_id, table_name = table_id.split('.')
+        
+        # Ensure dataset exists
+        try:
+            dataset = client.get_dataset(dataset_id)
+        except Exception:
+            dataset = bigquery.Dataset(f"{project_id}.{dataset_id}")
+            dataset = client.create_dataset(dataset, exists_ok=True)
+            print(f"Created dataset {dataset_id}")
+        
+        table_ref = dataset.table(table_name)
         records = df.to_dict('records')
         
         job_config = bigquery.LoadJobConfig(
@@ -131,7 +158,15 @@ def push_batch_to_bq(rows, table_id, project_id):
         traceback.print_exc()
         return 0
 
-def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=0.86):  # 0.86s = ~70 calls per minute
+def fetch_historical_options(symbol, date_range, table_id, project_id):
+    """
+    Fetch historical options data from Alpha Vantage API and store in BigQuery.
+    
+    This function implements Pro API rate limiting:
+    - Maximum 70 calls per minute
+    - 0.86 seconds between calls (60/70 ≈ 0.86)
+    - Automatic pause when limit is reached
+    """
     print("Fetching historical options with Pro API rate limit (70 calls/minute)...")
     create_options_table_if_not_exists(table_id, project_id)
     alpha_vantage_key = get_secret("alpha_vantage_api_key")
@@ -218,16 +253,16 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
             last_call_time = current_time
         
         # If we're approaching the rate limit, wait until the minute is up
-        if calls_in_last_minute >= 70:
+        if calls_in_last_minute >= 70:  # Pro API limit
             wait_time = 60 - (current_time - last_call_time)
             if wait_time > 0:
                 print(f"Reached rate limit (70 calls/minute). Waiting {wait_time:.2f} seconds...")
                 time.sleep(wait_time)
                 calls_in_last_minute = 0
                 last_call_time = time.time()
-        # Small delay between calls to prevent overwhelming the API
+        # Small delay between calls (0.86s = ~70 calls/minute)
         elif idx < len(date_range) - 1:
-            time.sleep(sleep_seconds)
+            time.sleep(0.86)  # Enforcing the delay explicitly rather than using sleep_seconds parameter
 
     # Push the final batch
     if current_batch:
@@ -257,11 +292,20 @@ def process_symbol(symbol, project_id, date_start, date_end=None):
     
     try:
         rows_inserted = fetch_historical_options(symbol, date_range, table_id, project_id)
-        print(f"Completed {symbol}: {rows_inserted} rows inserted")
+        if rows_inserted > 0:
+            print(f"Successfully completed {symbol}: {rows_inserted} rows inserted")
+        else:
+            print(f"No data inserted for {symbol}")
         return rows_inserted
     except Exception as e:
         print(f"Error processing {symbol}: {str(e)}")
+        import traceback
+        print("Full error traceback:")
+        traceback.print_exc()
         return 0
+    finally:
+        print(f"Finished processing {symbol}")
+        print(f"{'='*80}")
 
 def main():
     config = get_config()
@@ -273,40 +317,88 @@ def main():
     try:
         df_sp500 = pd.read_csv(sp500_file)
         symbols = df_sp500['Symbol'].tolist()
+        print(f"Successfully loaded {len(symbols)} symbols from {sp500_file}")
     except Exception as e:
         print(f"Error reading {sp500_file}: {str(e)}")
         return
-    
+
     total_symbols = len(symbols)
     total_rows_inserted = 0
+    successful_symbols = []
     failed_symbols = []
+    empty_symbols = []
     
     print(f"\nStarting data collection for {total_symbols} symbols")
     print(f"Start date: {date_start}")
     print(f"Project ID: {project_id}")
+    print(f"{'='*80}")
     
     for idx, symbol in enumerate(symbols, 1):
         print(f"\nProcessing symbol {idx}/{total_symbols}: {symbol}")
-        rows = process_symbol(symbol, project_id, date_start)
-        
-        if rows > 0:
-            total_rows_inserted += rows
-        else:
+        try:
+            rows = process_symbol(symbol, project_id, date_start)
+            
+            if rows > 0:
+                total_rows_inserted += rows
+                successful_symbols.append(symbol)
+                print(f"Progress: {idx}/{total_symbols} symbols processed")
+                print(f"Current total rows: {total_rows_inserted}")
+            else:
+                empty_symbols.append(symbol)
+                print(f"No data found for {symbol}")
+        except KeyboardInterrupt:
+            print("\nProcess interrupted by user!")
+            break
+        except Exception as e:
+            print(f"Error processing {symbol}: {str(e)}")
             failed_symbols.append(symbol)
+            continue
     
+    # Print summary
     print(f"\n{'='*80}")
     print("Data Collection Summary")
     print(f"{'='*80}")
-    print(f"Total symbols processed: {total_symbols}")
+    print(f"Total symbols attempted: {total_symbols}")
+    print(f"Successful symbols: {len(successful_symbols)}")
+    print(f"Empty symbols: {len(empty_symbols)}")
+    print(f"Failed symbols: {len(failed_symbols)}")
     print(f"Total rows inserted: {total_rows_inserted}")
-    print(f"Average rows per symbol: {total_rows_inserted/total_symbols:.2f}")
+    
+    if successful_symbols:
+        avg_rows = total_rows_inserted/len(successful_symbols)
+        print(f"Average rows per successful symbol: {avg_rows:.2f}")
+    
+    # Print detailed symbol lists
+    if empty_symbols:
+        print(f"\nSymbols with no data ({len(empty_symbols)}):")
+        for symbol in empty_symbols:
+            print(f"- {symbol}")
     
     if failed_symbols:
         print(f"\nFailed symbols ({len(failed_symbols)}):")
         for symbol in failed_symbols:
             print(f"- {symbol}")
-    else:
-        print("\nAll symbols processed successfully!")
+    
+    if successful_symbols:
+        print(f"\nSuccessful symbols ({len(successful_symbols)}):")
+        for symbol in successful_symbols:
+            print(f"- {symbol}")
+    
+    # Save summary to file
+    summary_file = "data_collection_summary.txt"
+    try:
+        with open(summary_file, "w") as f:
+            f.write("Data Collection Summary\n")
+            f.write(f"Date: {pd.Timestamp.now()}\n")
+            f.write(f"Start date: {date_start}\n")
+            f.write(f"Total symbols: {total_symbols}\n")
+            f.write(f"Total rows: {total_rows_inserted}\n")
+            f.write(f"Successful symbols: {', '.join(successful_symbols)}\n")
+            f.write(f"Empty symbols: {', '.join(empty_symbols)}\n")
+            f.write(f"Failed symbols: {', '.join(failed_symbols)}\n")
+        print(f"\nSummary saved to {summary_file}")
+    except Exception as e:
+        print(f"Failed to save summary file: {e}")
 
 # Only run main if executed as a script, not on import
 if __name__ == "__main__":
