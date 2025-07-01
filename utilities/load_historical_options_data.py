@@ -284,10 +284,14 @@ def process_symbol(symbol, project_id, date_start, date_end=None):
         date_end = pd.Timestamp.today().strftime("%Y-%m-%d")
     
     table_id = f"historical_data.{symbol.lower()}"
-    date_range = pd.date_range(start=date_start, end=date_end).strftime("%Y-%m-%d").tolist()
+    # Generate date range and exclude weekends
+    date_range = pd.date_range(start=date_start, end=date_end)
+    # Monday = 0, Sunday = 6
+    trading_days = date_range[date_range.weekday < 5].strftime("%Y-%m-%d").tolist()
     
     print(f"\n{'='*80}")
     print(f"Processing {symbol} from {date_start} to {date_end}")
+    print(f"Will fetch {len(trading_days)} trading days (excluding weekends)")
     print(f"{'='*80}")
     
     try:
