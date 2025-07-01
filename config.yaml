@@ -1,5 +1,4 @@
 project_id: voldilsloc
-symbol: BSX
-table_id: historical_data.bsx
-date_start: 2025-06-25
-# date_end will be set to today dynamically in the script
+date_start: 2025-05-01
+# Configuration for S&P 500 data collection
+# Each symbol will be stored in its own table: historical_data.<symbol>

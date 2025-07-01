@@ -67,16 +67,96 @@ def create_session_with_retries():
     session.mount("http://", adapter)
     return session
 
+def push_batch_to_bq(rows, table_id, project_id):
+    """Helper function to push a batch of data to BigQuery"""
+    if not rows:
+        return 0
+    
+    try:
+        print(f"\nPreparing to insert {len(rows)} rows into {table_id}...")
+        df = pd.DataFrame(rows)
+        
+        # Convert date columns to YYYY-MM-DD format
+        date_columns = ['expiration', 'date', 'collected_date']
+        for col in date_columns:
+            df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
+        
+        print("\nSample of data to be inserted:")
+        print(df.head(1).to_string())
+        
+        client = bigquery.Client(project=project_id)
+        table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
+        records = df.to_dict('records')
+        
+        job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField('contractID', 'STRING'),
+                bigquery.SchemaField('symbol', 'STRING'),
+                bigquery.SchemaField('expiration', 'DATE'),
+                bigquery.SchemaField('strike', 'FLOAT'),
+                bigquery.SchemaField('type', 'STRING'),
+                bigquery.SchemaField('last', 'FLOAT'),
+                bigquery.SchemaField('mark', 'FLOAT'),
+                bigquery.SchemaField('bid', 'FLOAT'),
+                bigquery.SchemaField('bid_size', 'INTEGER'),
+                bigquery.SchemaField('ask', 'FLOAT'),
+                bigquery.SchemaField('ask_size', 'INTEGER'),
+                bigquery.SchemaField('volume', 'INTEGER'),
+                bigquery.SchemaField('open_interest', 'INTEGER'),
+                bigquery.SchemaField('date', 'DATE'),
+                bigquery.SchemaField('implied_volatility', 'FLOAT'),
+                bigquery.SchemaField('delta', 'FLOAT'),
+                bigquery.SchemaField('gamma', 'FLOAT'),
+                bigquery.SchemaField('theta', 'FLOAT'),
+                bigquery.SchemaField('vega', 'FLOAT'),
+                bigquery.SchemaField('rho', 'FLOAT'),
+                bigquery.SchemaField('collected_date', 'DATE')
+            ],
+            write_disposition="WRITE_APPEND"
+        )
+        
+        job = client.load_table_from_json(records, table_ref, job_config=job_config)
+        result = job.result()
+        
+        destination_table = client.get_table(table_ref)
+        print(f"\nBatch upload completed. Current table size: {destination_table.num_rows} rows")
+        return len(records)
+        
+    except Exception as e:
+        print(f"\nFailed to insert batch into {table_id}")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        print("\nFull error traceback:")
+        traceback.print_exc()
+        return 0
+
 def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_seconds=0.86):  # 0.86s = ~70 calls per minute
     print("Fetching historical options with Pro API rate limit (70 calls/minute)...")
     create_options_table_if_not_exists(table_id, project_id)
     alpha_vantage_key = get_secret("alpha_vantage_api_key")
     calls_in_last_minute = 0
     last_call_time = time.time()
-    all_rows = []
+    current_batch = []
+    current_month = None
+    total_rows_inserted = 0
     session = create_session_with_retries()
 
     for idx, date in enumerate(date_range):
+        current_date = pd.to_datetime(date)
+        # If we're starting a new month or this is the first date
+        if current_month is None:
+            current_month = current_date.strftime('%Y-%m')
+        elif current_date.strftime('%Y-%m') != current_month:
+            # Push the current batch before starting a new month
+            print(f"\nCompleted month {current_month}, pushing batch to BigQuery...")
+            rows_inserted = push_batch_to_bq(current_batch, table_id, project_id)
+            total_rows_inserted += rows_inserted
+            print(f"Inserted {rows_inserted} rows for {current_month}. Total rows so far: {total_rows_inserted}")
+            # Reset for new month
+            current_batch = []
+            current_month = current_date.strftime('%Y-%m')
+        
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
         print(f"Fetching data for {symbol} on {date}...")
         
@@ -95,7 +175,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
                     if record_count == 0:
                         print("Warning: Empty data array returned from API")
                     for row in data['data']:
-                        all_rows.append({
+                        current_batch.append({
                             'contractID': row.get('contractID'),
                             'symbol': row.get('symbol', symbol),
                             'expiration': row.get('expiration'),
@@ -148,99 +228,85 @@ def fetch_historical_options(symbol, date_range, table_id, project_id, sleep_sec
         # Small delay between calls to prevent overwhelming the API
         elif idx < len(date_range) - 1:
             time.sleep(sleep_seconds)
-    if all_rows:
-        print(f"Preparing to insert {len(all_rows)} rows into {table_id}...")
-        try:
-            # Convert to pandas DataFrame for easier data validation
-            df = pd.DataFrame(all_rows)
-            print("\nData types before conversion:")
-            print(df.dtypes)
-            
-            # Convert date columns to YYYY-MM-DD format
-            date_columns = ['expiration', 'date', 'collected_date']
-            for col in date_columns:
-                df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
-            
-            print("\nSample of data to be inserted:")
-            print(df.head(1).to_string())
-            
-            client = bigquery.Client(project=project_id)
-            table_ref = client.dataset(table_id.split('.')[0]).table(table_id.split('.')[1])
-            
-            # Convert back to records
-            records = df.to_dict('records')
-            
-            job_config = bigquery.LoadJobConfig(
-                schema=[
-                    bigquery.SchemaField('contractID', 'STRING'),
-                    bigquery.SchemaField('symbol', 'STRING'),
-                    bigquery.SchemaField('expiration', 'DATE'),
-                    bigquery.SchemaField('strike', 'FLOAT'),
-                    bigquery.SchemaField('type', 'STRING'),
-                    bigquery.SchemaField('last', 'FLOAT'),
-                    bigquery.SchemaField('mark', 'FLOAT'),
-                    bigquery.SchemaField('bid', 'FLOAT'),
-                    bigquery.SchemaField('bid_size', 'INTEGER'),
-                    bigquery.SchemaField('ask', 'FLOAT'),
-                    bigquery.SchemaField('ask_size', 'INTEGER'),
-                    bigquery.SchemaField('volume', 'INTEGER'),
-                    bigquery.SchemaField('open_interest', 'INTEGER'),
-                    bigquery.SchemaField('date', 'DATE'),
-                    bigquery.SchemaField('implied_volatility', 'FLOAT'),
-                    bigquery.SchemaField('delta', 'FLOAT'),
-                    bigquery.SchemaField('gamma', 'FLOAT'),
-                    bigquery.SchemaField('theta', 'FLOAT'),
-                    bigquery.SchemaField('vega', 'FLOAT'),
-                    bigquery.SchemaField('rho', 'FLOAT'),
-                    bigquery.SchemaField('collected_date', 'DATE')
-                ],
-                write_disposition="WRITE_APPEND"
-            )
-            
-            # Start the load job
-            job = client.load_table_from_json(records, table_ref, job_config=job_config)
-            print("\nBigQuery job started. Waiting for completion...")
-            
-            # Wait for the job to complete and get the result
-            result = job.result()  # This will raise an exception if the job fails
-            
-            # Get the destination table
-            destination_table = client.get_table(table_ref)
-            
-            print(f"\nJob status: COMPLETED")
-            print(f"Table size: {destination_table.num_rows} rows")
-            print(f"Data uploaded successfully to {table_id}")
-            
-            if job.errors:
-                print("\nErrors encountered:")
-                for error in job.errors:
-                    print(f"Error: {error['message']}")
-                return 0
-            
-            print(f"\nSuccessfully inserted {len(records)} rows into {table_id}.")
-            return len(records)
-            
-        except Exception as e:
-            print(f"\nFailed to insert data into {table_id}")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {str(e)}")
-            import traceback
-            print("\nFull error traceback:")
-            traceback.print_exc()
-            return 0
+
+    # Push the final batch
+    if current_batch:
+        print(f"\nPushing final batch for {current_month} to BigQuery...")
+        rows_inserted = push_batch_to_bq(current_batch, table_id, project_id)
+        total_rows_inserted += rows_inserted
+        print(f"Inserted {rows_inserted} rows for {current_month}. Final total: {total_rows_inserted}")
+    
+    if total_rows_inserted > 0:
+        print(f"\nCompleted all data collection and uploads. Total rows inserted: {total_rows_inserted}")
+        return total_rows_inserted
     else:
-        print("No data returned.")
+        print("No data was collected or inserted.")
+        return 0
+
+def process_symbol(symbol, project_id, date_start, date_end=None):
+    """Process a single symbol and upload its data to BigQuery"""
+    if date_end is None:
+        date_end = pd.Timestamp.today().strftime("%Y-%m-%d")
+    
+    table_id = f"historical_data.{symbol.lower()}"
+    date_range = pd.date_range(start=date_start, end=date_end).strftime("%Y-%m-%d").tolist()
+    
+    print(f"\n{'='*80}")
+    print(f"Processing {symbol} from {date_start} to {date_end}")
+    print(f"{'='*80}")
+    
+    try:
+        rows_inserted = fetch_historical_options(symbol, date_range, table_id, project_id)
+        print(f"Completed {symbol}: {rows_inserted} rows inserted")
+        return rows_inserted
+    except Exception as e:
+        print(f"Error processing {symbol}: {str(e)}")
         return 0
 
 def main():
     config = get_config()
     project_id = config["project_id"]
-    symbol = config["symbol"]
-    table_id = config["table_id"]
     date_start = config["date_start"]
-    today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    date_range = pd.date_range(start=date_start, end=today).strftime("%Y-%m-%d").tolist()
-    fetch_historical_options(symbol, date_range, table_id, project_id)
+    
+    # Read S&P 500 constituents
+    sp500_file = "org_files/S&P 500 Constituents.csv"
+    try:
+        df_sp500 = pd.read_csv(sp500_file)
+        symbols = df_sp500['Symbol'].tolist()
+    except Exception as e:
+        print(f"Error reading {sp500_file}: {str(e)}")
+        return
+    
+    total_symbols = len(symbols)
+    total_rows_inserted = 0
+    failed_symbols = []
+    
+    print(f"\nStarting data collection for {total_symbols} symbols")
+    print(f"Start date: {date_start}")
+    print(f"Project ID: {project_id}")
+    
+    for idx, symbol in enumerate(symbols, 1):
+        print(f"\nProcessing symbol {idx}/{total_symbols}: {symbol}")
+        rows = process_symbol(symbol, project_id, date_start)
+        
+        if rows > 0:
+            total_rows_inserted += rows
+        else:
+            failed_symbols.append(symbol)
+    
+    print(f"\n{'='*80}")
+    print("Data Collection Summary")
+    print(f"{'='*80}")
+    print(f"Total symbols processed: {total_symbols}")
+    print(f"Total rows inserted: {total_rows_inserted}")
+    print(f"Average rows per symbol: {total_rows_inserted/total_symbols:.2f}")
+    
+    if failed_symbols:
+        print(f"\nFailed symbols ({len(failed_symbols)}):")
+        for symbol in failed_symbols:
+            print(f"- {symbol}")
+    else:
+        print("\nAll symbols processed successfully!")
 
 # Only run main if executed as a script, not on import
 if __name__ == "__main__":
