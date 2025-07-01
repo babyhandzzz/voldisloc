@@ -192,80 +192,83 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
     current_batch = []
     total_rows_inserted = 0
     session = create_session_with_retries()
-    MAX_BATCH_SIZE = 1000  # Add a maximum batch size
+    current_month = None
 
     for idx, date in enumerate(date_range):
         current_date = pd.to_datetime(date)
         
-        # Push batch if it gets too large
-        if len(current_batch) >= MAX_BATCH_SIZE:
-            print(f"\nReached max batch size ({MAX_BATCH_SIZE}), pushing to BigQuery...")
-            rows_inserted = push_batch_to_bq(current_batch, table_id, project_id)
-            total_rows_inserted += rows_inserted
-            print(f"Inserted {rows_inserted} rows. Total rows so far: {total_rows_inserted}")
-            current_batch = []
+        # Check if we're starting a new month
+        date_month = current_date.strftime('%Y-%m')
+        if current_month is None:
+            current_month = date_month
+        elif date_month != current_month:
+            # Push the current month's batch before starting a new month
+            if current_batch:
+                print(f"\nCompleted month {current_month}, pushing {len(current_batch)} records to BigQuery...")
+                rows_inserted = push_batch_to_bq(current_batch, table_id, project_id)
+                total_rows_inserted += rows_inserted
+                print(f"Inserted {rows_inserted} rows for {current_month}. Total rows so far: {total_rows_inserted}")
+                current_batch = []  # Reset batch for new month
+            current_month = date_month
         
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
         print(f"Fetching data for {symbol} on {date}...")
         
         try:
             response = session.get(url)
-            print(f"Response status code: {response.status_code}")
             
             if response.status_code == 503:
                 print(f"Service unavailable for {symbol} on {date}. Will retry automatically...")
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'data' in data and data['data']:
-                    record_count = len(data['data'])
-                    print(f"Found {record_count} records for {symbol} on {date}")
-                    if record_count == 0:
-                        print("Warning: Empty data array returned from API")
-                    for row in data['data']:
-                        current_batch.append({
-                            'contractID': row.get('contractID'),
-                            'symbol': row.get('symbol', symbol),
-                            'expiration': row.get('expiration'),
-                            'strike': float(row.get('strike')) if row.get('strike') is not None else None,
-                            'type': row.get('type'),
-                            'last': float(row.get('last')) if row.get('last') is not None else None,
-                            'mark': float(row.get('mark')) if row.get('mark') is not None else None,
-                            'bid': float(row.get('bid')) if row.get('bid') is not None else None,
-                            'bid_size': int(row.get('bid_size')) if row.get('bid_size') is not None else None,
-                            'ask': float(row.get('ask')) if row.get('ask') is not None else None,
-                            'ask_size': int(row.get('ask_size')) if row.get('ask_size') is not None else None,
-                            'volume': int(row.get('volume')) if row.get('volume') is not None else None,
-                            'open_interest': int(row.get('open_interest')) if row.get('open_interest') is not None else None,
-                            'date': row.get('date', date),
-                            'implied_volatility': float(row.get('implied_volatility')) if row.get('implied_volatility') is not None else None,
-                            'delta': float(row.get('delta')) if row.get('delta') is not None else None,
-                            'gamma': float(row.get('gamma')) if row.get('gamma') is not None else None,
-                            'theta': float(row.get('theta')) if row.get('theta') is not None else None,
-                            'vega': float(row.get('vega')) if row.get('vega') is not None else None,
-                            'rho': float(row.get('rho')) if row.get('rho') is not None else None,
-                            'collected_date': date
-                        })
-                else:
-                    print(f"No data for {symbol} on {date}")
-            else:
+            elif response.status_code != 200:
                 print(f"Error: Unable to fetch data for {symbol} on {date}. Status code: {response.status_code}")
                 print("API Response:", response.text)
-                
+                continue
+            
+            data = response.json()
+            if 'data' in data and data['data']:
+                record_count = len(data['data'])
+                print(f"Found {record_count} records for {symbol} on {date}")
+                if record_count == 0:
+                    print("Warning: Empty data array returned from API")
+                for row in data['data']:
+                    current_batch.append({
+                        'contractID': row.get('contractID'),
+                        'symbol': row.get('symbol', symbol),
+                        'expiration': row.get('expiration'),
+                        'strike': float(row.get('strike')) if row.get('strike') is not None else None,
+                        'type': row.get('type'),
+                        'last': float(row.get('last')) if row.get('last') is not None else None,
+                        'mark': float(row.get('mark')) if row.get('mark') is not None else None,
+                        'bid': float(row.get('bid')) if row.get('bid') is not None else None,
+                        'bid_size': int(row.get('bid_size')) if row.get('bid_size') is not None else None,
+                        'ask': float(row.get('ask')) if row.get('ask') is not None else None,
+                        'ask_size': int(row.get('ask_size')) if row.get('ask_size') is not None else None,
+                        'volume': int(row.get('volume')) if row.get('volume') is not None else None,
+                        'open_interest': int(row.get('open_interest')) if row.get('open_interest') is not None else None,
+                        'date': row.get('date', date),
+                        'implied_volatility': float(row.get('implied_volatility')) if row.get('implied_volatility') is not None else None,
+                        'delta': float(row.get('delta')) if row.get('delta') is not None else None,
+                        'gamma': float(row.get('gamma')) if row.get('gamma') is not None else None,
+                        'theta': float(row.get('theta')) if row.get('theta') is not None else None,
+                        'vega': float(row.get('vega')) if row.get('vega') is not None else None,
+                        'rho': float(row.get('rho')) if row.get('rho') is not None else None,
+                        'collected_date': date
+                    })
+                else:
+                    print(f"No data for {symbol} on {date}")
         except requests.exceptions.RequestException as e:
             print(f"Request failed after all retries for {symbol} on {date}: {e}")
             continue
 
         calls_in_last_minute += 1
         
-        # Reset counter if a minute has passed
+        # Rate limiting logic
         current_time = time.time()
         if current_time - last_call_time >= 60:
             print(f"Resetting rate limit counter. Made {calls_in_last_minute} calls in the last minute.")
             calls_in_last_minute = 0
             last_call_time = current_time
         
-        # If we're approaching the rate limit, wait until the minute is up
         if calls_in_last_minute >= 70:  # Pro API limit
             wait_time = 60 - (current_time - last_call_time)
             if wait_time > 0:
@@ -273,16 +276,15 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
                 time.sleep(wait_time)
                 calls_in_last_minute = 0
                 last_call_time = time.time()
-        # Small delay between calls (0.86s = ~70 calls/minute)
         elif idx < len(date_range) - 1:
             time.sleep(0.86)  # Enforcing the delay explicitly
 
-    # Push the final batch
+    # Push the final month's batch
     if current_batch:
-        print(f"\nPushing final batch to BigQuery...")
+        print(f"\nPushing final batch for {current_month} to BigQuery...")
         rows_inserted = push_batch_to_bq(current_batch, table_id, project_id)
         total_rows_inserted += rows_inserted
-        print(f"Inserted {rows_inserted} rows. Final total: {total_rows_inserted}")
+        print(f"Inserted {rows_inserted} rows for final month. Total rows: {total_rows_inserted}")
     
     if total_rows_inserted > 0:
         print(f"\nCompleted all data collection and uploads. Total rows inserted: {total_rows_inserted}")
