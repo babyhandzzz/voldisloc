@@ -87,84 +87,99 @@ def push_batch_to_bq(rows, table_id, project_id):
     try:
         print(f"\nPreparing to insert {len(rows)} rows into {table_id}...")
         
-        # Convert to DataFrame and handle data types
-        df = pd.DataFrame(rows)
+        # Process in smaller chunks to manage memory
+        chunk_size = 1000  # Adjust this based on your memory constraints
+        total_processed = 0
         
-        # Validate required columns
-        required_columns = ['symbol', 'date', 'collected_date']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i:i + chunk_size]
+            
+            # Convert chunk to DataFrame and handle data types
+            df = pd.DataFrame(chunk)
+            
+            # Validate required columns
+            required_columns = ['symbol', 'date', 'collected_date']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                print(f"Warning: Skipping chunk due to missing columns: {missing_columns}")
+                continue
+            
+            # Convert numeric columns to appropriate types
+            float_cols = ['strike', 'last', 'mark', 'bid', 'ask', 'implied_volatility', 'delta', 'gamma', 'theta', 'vega', 'rho']
+            int_cols = ['bid_size', 'ask_size', 'volume', 'open_interest']
+            
+            for col in float_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            for col in int_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+            
+            # Convert date columns to YYYY-MM-DD format
+            date_columns = ['expiration', 'date', 'collected_date']
+            for col in date_columns:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
+            
+            # Remove rows with missing critical data
+            critical_cols = ['symbol', 'date', 'strike', 'type']
+            initial_rows = len(df)
+            df = df.dropna(subset=critical_cols)
+            dropped_rows = initial_rows - len(df)
+            
+            if dropped_rows > 0:
+                print(f"Warning: Dropped {dropped_rows} rows with missing critical data in current chunk")
+            
+            if len(df) == 0:
+                print("Warning: No valid rows to insert after data cleaning in current chunk")
+                continue
+            
+            # Convert to records and free DataFrame memory
+            records = df.to_dict('records')
+            del df  # Explicitly free DataFrame memory
+            
+            client = bigquery.Client(project=project_id)
+            dataset_id, table_name = table_id.split('.')
+            dataset_ref = client.dataset(dataset_id)
+            table_ref = dataset_ref.table(table_name)
+            
+            job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField('contractID', 'STRING'),
+                    bigquery.SchemaField('symbol', 'STRING'),
+                    bigquery.SchemaField('expiration', 'DATE'),
+                    bigquery.SchemaField('strike', 'FLOAT'),
+                    bigquery.SchemaField('type', 'STRING'),
+                    bigquery.SchemaField('last', 'FLOAT'),
+                    bigquery.SchemaField('mark', 'FLOAT'),
+                    bigquery.SchemaField('bid', 'FLOAT'),
+                    bigquery.SchemaField('bid_size', 'INTEGER'),
+                    bigquery.SchemaField('ask', 'FLOAT'),
+                    bigquery.SchemaField('ask_size', 'INTEGER'),
+                    bigquery.SchemaField('volume', 'INTEGER'),
+                    bigquery.SchemaField('open_interest', 'INTEGER'),
+                    bigquery.SchemaField('date', 'DATE'),
+                    bigquery.SchemaField('implied_volatility', 'FLOAT'),
+                    bigquery.SchemaField('delta', 'FLOAT'),
+                    bigquery.SchemaField('gamma', 'FLOAT'),
+                    bigquery.SchemaField('theta', 'FLOAT'),
+                    bigquery.SchemaField('vega', 'FLOAT'),
+                    bigquery.SchemaField('rho', 'FLOAT'),
+                    bigquery.SchemaField('collected_date', 'DATE')
+                ],
+                write_disposition="WRITE_APPEND"
+            )
+            
+            job = client.load_table_from_json(records, table_ref, job_config=job_config)
+            result = job.result()
+            total_processed += len(records)
+            print(f"Processed chunk {i//chunk_size + 1}, total rows so far: {total_processed}")
+            
+            # Free memory
+            del records
         
-        # Convert numeric columns to appropriate types
-        float_cols = ['strike', 'last', 'mark', 'bid', 'ask', 'implied_volatility', 'delta', 'gamma', 'theta', 'vega', 'rho']
-        int_cols = ['bid_size', 'ask_size', 'volume', 'open_interest']
-        
-        for col in float_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        for col in int_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
-        
-        # Convert date columns to YYYY-MM-DD format
-        date_columns = ['expiration', 'date', 'collected_date']
-        for col in date_columns:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
-        
-        # Remove rows with missing critical data
-        critical_cols = ['symbol', 'date', 'strike', 'type']
-        initial_rows = len(df)
-        df = df.dropna(subset=critical_cols)
-        dropped_rows = initial_rows - len(df)
-        if dropped_rows > 0:
-            print(f"Warning: Dropped {dropped_rows} rows with missing critical data")
-        
-        if len(df) == 0:
-            print("Warning: No valid rows to insert after data cleaning")
-            return 0
-        
-        client = bigquery.Client(project=project_id)
-        dataset_id, table_name = table_id.split('.')
-        dataset_ref = client.dataset(dataset_id)
-        table_ref = dataset_ref.table(table_name)
-        records = df.to_dict('records')
-        
-        job_config = bigquery.LoadJobConfig(
-            schema=[
-                bigquery.SchemaField('contractID', 'STRING'),
-                bigquery.SchemaField('symbol', 'STRING'),
-                bigquery.SchemaField('expiration', 'DATE'),
-                bigquery.SchemaField('strike', 'FLOAT'),
-                bigquery.SchemaField('type', 'STRING'),
-                bigquery.SchemaField('last', 'FLOAT'),
-                bigquery.SchemaField('mark', 'FLOAT'),
-                bigquery.SchemaField('bid', 'FLOAT'),
-                bigquery.SchemaField('bid_size', 'INTEGER'),
-                bigquery.SchemaField('ask', 'FLOAT'),
-                bigquery.SchemaField('ask_size', 'INTEGER'),
-                bigquery.SchemaField('volume', 'INTEGER'),
-                bigquery.SchemaField('open_interest', 'INTEGER'),
-                bigquery.SchemaField('date', 'DATE'),
-                bigquery.SchemaField('implied_volatility', 'FLOAT'),
-                bigquery.SchemaField('delta', 'FLOAT'),
-                bigquery.SchemaField('gamma', 'FLOAT'),
-                bigquery.SchemaField('theta', 'FLOAT'),
-                bigquery.SchemaField('vega', 'FLOAT'),
-                bigquery.SchemaField('rho', 'FLOAT'),
-                bigquery.SchemaField('collected_date', 'DATE')
-            ],
-            write_disposition="WRITE_APPEND"
-        )
-        
-        job = client.load_table_from_json(records, table_ref, job_config=job_config)
-        result = job.result()
-        
-        destination_table = client.get_table(table_ref)
-        print(f"\nBatch upload completed. Current table size: {destination_table.num_rows} rows")
-        return len(records)
+        return total_processed
         
     except Exception as e:
         print(f"\nFailed to insert batch into {table_id}")
@@ -175,17 +190,66 @@ def push_batch_to_bq(rows, table_id, project_id):
         traceback.print_exc()
         return 0
 
+def get_existing_dates(symbol, table_id, project_id):
+    """
+    Query BigQuery to get the dates that already have data for a given symbol.
+    Returns a set of dates in YYYY-MM-DD format.
+    """
+    client = bigquery.Client(project=project_id)
+    query = f"""
+    SELECT DISTINCT date
+    FROM `{table_id}`
+    WHERE symbol = @symbol
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("symbol", "STRING", symbol)
+        ]
+    )
+    
+    try:
+        query_job = client.query(query, job_config=job_config)
+        existing_dates = {row.date.strftime('%Y-%m-%d') for row in query_job}
+        print(f"Found {len(existing_dates)} existing dates for {symbol}")
+        return existing_dates
+    except Exception as e:
+        print(f"Error querying existing dates: {str(e)}")
+        return set()  # Return empty set on error to be safe
+
+def filter_date_range(date_range, existing_dates):
+    """
+    Filter out dates that already exist in the database.
+    Returns new date range and count of skipped dates.
+    """
+    new_date_range = [date for date in date_range if date not in existing_dates]
+    skipped_count = len(date_range) - len(new_date_range)
+    return new_date_range, skipped_count
+
 def fetch_historical_options(symbol, date_range, table_id, project_id):
     """
     Fetch historical options data from Alpha Vantage API and store in BigQuery.
     
     This function implements Pro API rate limiting:
-    - Maximum 70 calls per minute
-    - 0.86 seconds between calls (60/70 ≈ 0.86)
+    - Maximum 74 calls per minute
+    - 0.81 seconds between calls (60/74 ≈ 0.81)
     - Automatic pause when limit is reached
     """
     print("Fetching historical options with Pro API rate limit (70 calls/minute)...")
     create_options_table_if_not_exists(table_id, project_id)
+    
+    # Check existing data first
+    existing_dates = get_existing_dates(symbol, table_id, project_id)
+    filtered_date_range, skipped_dates = filter_date_range(date_range, existing_dates)
+    
+    if skipped_dates > 0:
+        print(f"Skipping {skipped_dates} dates that already have data")
+    
+    if not filtered_date_range:
+        print("No new dates to process - all dates already exist in the database")
+        return 0
+    
+    print(f"Processing {len(filtered_date_range)} new dates")
+    
     alpha_vantage_key = get_secret("alpha_vantage_api_key")
     calls_in_last_minute = 0
     last_call_time = time.time()
@@ -194,7 +258,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
     session = create_session_with_retries()
     current_month = None
 
-    for idx, date in enumerate(date_range):
+    for idx, date in enumerate(filtered_date_range):
         current_date = pd.to_datetime(date)
         
         # Check if we're starting a new month
@@ -213,11 +277,17 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
             current_month = date_month
             print(f"\nStarting month {current_month}")
         
+        # Add rate limiting delay if needed
+        elapsed = time.time() - last_call_time
+        if elapsed < 0.81:  # 60/74 seconds between calls
+            time.sleep(0.81 - elapsed)
+        
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
         print(f"Fetching data for {symbol} on {date}...")
         
         try:
             response = session.get(url)
+            last_call_time = time.time()  # Update last call time
             
             if response.status_code == 503:
                 print(f"Service unavailable for {symbol} on {date}. Will retry automatically...")
@@ -271,7 +341,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
             calls_in_last_minute = 0
             last_call_time = current_time
         
-        if calls_in_last_minute >= 70:  # Pro API limit
+        if calls_in_last_minute >= 74:  # Pro API limit
             wait_time = 60 - (current_time - last_call_time)
             if wait_time > 0:
                 print(f"Reached rate limit (70 calls/minute). Waiting {wait_time:.2f} seconds...")
@@ -279,7 +349,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
                 calls_in_last_minute = 0
                 last_call_time = time.time()
         elif idx < len(date_range) - 1:
-            time.sleep(0.86)  # Enforcing the delay explicitly
+            time.sleep(0.81)  # Enforcing the delay explicitly
 
     # Push the final month's batch
     if current_batch:

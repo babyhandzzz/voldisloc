@@ -11,6 +11,7 @@ steps:
         '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/voldisloc-repo/voldisloc:$COMMIT_SHA',
         '--region', 'us-central1',
         '--platform', 'managed',
+        '--memory', '1Gi',
         '--allow-unauthenticated',
         '--service-account', 'cloud-run-deployer@voldilsloc.iam.gserviceaccount.com'
       ]
