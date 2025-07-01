@@ -126,11 +126,6 @@ def push_batch_to_bq(rows, table_id, project_id):
             print("Warning: No valid rows to insert after data cleaning")
             return 0
         
-        print("\nSample of data to be inserted:")
-        print(df.head(1).to_string())
-        print(f"\nData types after conversion:")
-        print(df.dtypes)
-        
         client = bigquery.Client(project=project_id)
         dataset_id, table_name = table_id.split('.')
         dataset_ref = client.dataset(dataset_id)
