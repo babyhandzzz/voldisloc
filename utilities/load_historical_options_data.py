@@ -262,7 +262,7 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
                 last_call_time = time.time()
         # Small delay between calls (0.86s = ~70 calls/minute)
         elif idx < len(date_range) - 1:
-            time.sleep(0.86)  # Enforcing the delay explicitly rather than using sleep_seconds parameter
+            time.sleep(0.86)  # Enforcing the delay explicitly
 
     # Push the final batch
     if current_batch:
@@ -295,7 +295,7 @@ def process_symbol(symbol, project_id, date_start, date_end=None):
     print(f"{'='*80}")
     
     try:
-        rows_inserted = fetch_historical_options(symbol, date_range, table_id, project_id)
+        rows_inserted = fetch_historical_options(symbol, trading_days, table_id, project_id)
         if rows_inserted > 0:
             print(f"Successfully completed {symbol}: {rows_inserted} rows inserted")
         else:
