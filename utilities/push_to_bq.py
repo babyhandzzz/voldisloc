@@ -11,6 +11,7 @@ def push_to_bq(df, table_id, project_id, if_exists='replace', table_schema=None)
         if_exists (str): 'fail', 'replace', or 'append'. Default is 'replace'.
         table_schema (list, optional): BigQuery table schema. Default is None.
     """
+    
     try:
         df.to_gbq(destination_table=table_id,
                   project_id=project_id,
