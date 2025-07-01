@@ -17,7 +17,18 @@ def get_config():
 def create_options_table_if_not_exists(table_id, project_id):
     client = bigquery.Client(project=project_id)
     dataset_id, table_name = table_id.split('.')
+    
+    # First ensure dataset exists
     dataset_ref = client.dataset(dataset_id)
+    try:
+        client.get_dataset(dataset_ref)
+        print(f"Dataset {dataset_id} exists.")
+    except Exception:
+        dataset = bigquery.Dataset(f"{project_id}.{dataset_id}")
+        dataset = client.create_dataset(dataset, exists_ok=True)
+        print(f"Created dataset {dataset_id}")
+    
+    # Then create table if it doesn't exist
     table_ref = dataset_ref.table(table_name)
     schema = [
         bigquery.SchemaField('contractID', 'STRING'),
@@ -70,6 +81,7 @@ def create_session_with_retries():
 def push_batch_to_bq(rows, table_id, project_id):
     """Helper function to push a batch of data to BigQuery"""
     if not rows:
+        print("Warning: Empty batch received, skipping upload")
         return 0
     
     try:
@@ -77,6 +89,12 @@ def push_batch_to_bq(rows, table_id, project_id):
         
         # Convert to DataFrame and handle data types
         df = pd.DataFrame(rows)
+        
+        # Validate required columns
+        required_columns = ['symbol', 'date', 'collected_date']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
         
         # Convert numeric columns to appropriate types
         float_cols = ['strike', 'last', 'mark', 'bid', 'ask', 'implied_volatility', 'delta', 'gamma', 'theta', 'vega', 'rho']
@@ -96,6 +114,18 @@ def push_batch_to_bq(rows, table_id, project_id):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
         
+        # Remove rows with missing critical data
+        critical_cols = ['symbol', 'date', 'strike', 'type']
+        initial_rows = len(df)
+        df = df.dropna(subset=critical_cols)
+        dropped_rows = initial_rows - len(df)
+        if dropped_rows > 0:
+            print(f"Warning: Dropped {dropped_rows} rows with missing critical data")
+        
+        if len(df) == 0:
+            print("Warning: No valid rows to insert after data cleaning")
+            return 0
+        
         print("\nSample of data to be inserted:")
         print(df.head(1).to_string())
         print(f"\nData types after conversion:")
@@ -103,16 +133,8 @@ def push_batch_to_bq(rows, table_id, project_id):
         
         client = bigquery.Client(project=project_id)
         dataset_id, table_name = table_id.split('.')
-        
-        # Ensure dataset exists
-        try:
-            dataset = client.get_dataset(dataset_id)
-        except Exception:
-            dataset = bigquery.Dataset(f"{project_id}.{dataset_id}")
-            dataset = client.create_dataset(dataset, exists_ok=True)
-            print(f"Created dataset {dataset_id}")
-        
-        table_ref = dataset.table(table_name)
+        dataset_ref = client.dataset(dataset_id)
+        table_ref = dataset_ref.table(table_name)
         records = df.to_dict('records')
         
         job_config = bigquery.LoadJobConfig(
@@ -173,24 +195,20 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
     calls_in_last_minute = 0
     last_call_time = time.time()
     current_batch = []
-    current_month = None
     total_rows_inserted = 0
     session = create_session_with_retries()
+    MAX_BATCH_SIZE = 1000  # Add a maximum batch size
 
     for idx, date in enumerate(date_range):
         current_date = pd.to_datetime(date)
-        # If we're starting a new month or this is the first date
-        if current_month is None:
-            current_month = current_date.strftime('%Y-%m')
-        elif current_date.strftime('%Y-%m') != current_month:
-            # Push the current batch before starting a new month
-            print(f"\nCompleted month {current_month}, pushing batch to BigQuery...")
+        
+        # Push batch if it gets too large
+        if len(current_batch) >= MAX_BATCH_SIZE:
+            print(f"\nReached max batch size ({MAX_BATCH_SIZE}), pushing to BigQuery...")
             rows_inserted = push_batch_to_bq(current_batch, table_id, project_id)
             total_rows_inserted += rows_inserted
-            print(f"Inserted {rows_inserted} rows for {current_month}. Total rows so far: {total_rows_inserted}")
-            # Reset for new month
+            print(f"Inserted {rows_inserted} rows. Total rows so far: {total_rows_inserted}")
             current_batch = []
-            current_month = current_date.strftime('%Y-%m')
         
         url = f"https://www.alphavantage.co/query?function=HISTORICAL_OPTIONS&symbol={symbol}&date={date}&apikey={alpha_vantage_key}"
         print(f"Fetching data for {symbol} on {date}...")
@@ -266,10 +284,10 @@ def fetch_historical_options(symbol, date_range, table_id, project_id):
 
     # Push the final batch
     if current_batch:
-        print(f"\nPushing final batch for {current_month} to BigQuery...")
+        print(f"\nPushing final batch to BigQuery...")
         rows_inserted = push_batch_to_bq(current_batch, table_id, project_id)
         total_rows_inserted += rows_inserted
-        print(f"Inserted {rows_inserted} rows for {current_month}. Final total: {total_rows_inserted}")
+        print(f"Inserted {rows_inserted} rows. Final total: {total_rows_inserted}")
     
     if total_rows_inserted > 0:
         print(f"\nCompleted all data collection and uploads. Total rows inserted: {total_rows_inserted}")
