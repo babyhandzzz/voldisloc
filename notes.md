@@ -9,3 +9,6 @@ options data is quite complex an requires normalization efforts. The plan is to 
  I realized there was no date in the table, so I didn't know which date any option chain belonged to. Fixed that.
 
 
+# 01/07/2025
+Figured out histroical data loading from alphaventage. running data collection as an app in GCP. 
+Had some issue with the memory. I will need to get rid of pandas to go faster.
